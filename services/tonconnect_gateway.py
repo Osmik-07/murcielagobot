@@ -36,9 +36,13 @@ from pytonconnect.exceptions import TonConnectError, UserRejectsError
 from pytonconnect.storage import DefaultStorage
 from ton_core import Address, JettonTransferBody, NetworkGlobalID, TextCommentBody, to_nano
 from tonutils.clients import TonapiClient, ToncenterClient
-from tonutils.contracts.jetton.methods import get_wallet_address_get_method
+from tonutils.contracts.jetton.methods import (
+    get_wallet_address_get_method,
+    get_wallet_data_get_method,
+)
 
 from db.models import Asset
+from services.pricing import format_amount
 
 logger = structlog.get_logger(__name__)
 
@@ -181,12 +185,24 @@ class TonConnectGateway:
         if session is None or not session.tc.connected:
             return PaymentOutcome(ok=False, message="Кошелёк не подключён.")
 
+        customer_address = session.tc.account.address
+
+        # Проверяем баланс ДО запроса подписи — иначе клиент вместо понятного
+        # «на кошельке нет денег» видит невнятную ошибку SDK (see: реальный
+        # тест показал ровно это на BadRequestError при нулевом USDT).
+        shortage = await self._check_customer_balance(
+            customer_address=customer_address, asset=asset, amount=amount, amount_units=amount_units,
+        )
+        if shortage is not None:
+            logger.info("tonconnect.insufficient_balance", order_id=order_id, asset=asset.value)
+            return PaymentOutcome(ok=False, message=shortage)
+
         try:
             if asset is Asset.ton:
                 message = self._build_ton_message(pay_to_address, amount_units, comment)
             else:
                 message = await self._build_jetton_message(
-                    customer_address=session.tc.account.address,
+                    customer_address=customer_address,
                     pay_to_address=pay_to_address,
                     amount_units=amount_units,
                     comment=comment,
@@ -227,6 +243,73 @@ class TonConnectGateway:
                 message=f"Не удалось отправить перевод через кошелёк: {exc}. Попробуй другой способ оплаты.",
             )
 
+    def _make_client(self) -> TonapiClient | ToncenterClient:
+        client_cls = ToncenterClient if self._api_provider == "toncenter" else TonapiClient
+        return client_cls(network=NetworkGlobalID.MAINNET, api_key=self._tonapi_key)
+
+    async def _check_customer_balance(
+        self,
+        *,
+        customer_address: str,
+        asset: Asset,
+        amount: Decimal,
+        amount_units: int,
+    ) -> str | None:
+        """
+        Прочитать баланс клиента ДО того, как просить кошелёк подписать
+        заведомо обречённую транзакцию.
+
+        Возвращает None, если денег хватает (или баланс не удалось прочитать —
+        в этом случае не блокируем, пусть решает сам кошелёк), иначе — готовый
+        текст для клиента.
+        """
+        try:
+            async with self._make_client() as ton:
+                ton_info = await ton.get_info(Address(customer_address))
+
+                if ton_info.balance <= 0:
+                    return (
+                        "На этом кошельке нет TON — даже перевод USDT не пройдёт без газа "
+                        "на комиссию сети. Пополни кошелёк или выбери другой способ оплаты."
+                    )
+
+                if asset is Asset.ton:
+                    if ton_info.balance < amount_units:
+                        return (
+                            f"На этом кошельке недостаточно TON: нужно {format_amount(amount, Asset.ton)}. "
+                            "Пополни кошелёк или выбери другой способ оплаты."
+                        )
+                    return None
+
+                # USDT: TON здесь только на газ, сама сумма — в джеттон-кошельке.
+                if ton_info.balance < _JETTON_TRANSFER_GAS:
+                    return (
+                        "На газ для перевода USDT не хватает TON на этом кошельке. "
+                        "Пополни его (немного TON, обычно достаточно 0.05) или выбери другой способ."
+                    )
+
+                try:
+                    jetton_wallet = await get_wallet_address_get_method(
+                        client=ton,
+                        address=USDT_TON_JETTON_MASTER,
+                        owner_address=Address(customer_address),
+                    )
+                    wallet_data = await get_wallet_data_get_method(client=ton, address=jetton_wallet)
+                    usdt_balance_units = int(wallet_data[0])
+                except Exception:
+                    # Контракт джеттон-кошелька ещё не задеплоен — значит USDT там никогда не было.
+                    usdt_balance_units = 0
+
+                if usdt_balance_units < amount_units:
+                    return (
+                        "На этом кошельке нет USDT (TON) — либо переведи их туда заранее, "
+                        "либо оплати заказ в TON, либо другим способом (например, Tonkeeper)."
+                    )
+                return None
+        except Exception as exc:  # noqa: BLE001 - не блокируем оплату из-за сбоя самой проверки
+            logger.warning("tonconnect.balance_check_failed", error=type(exc).__name__)
+            return None
+
     def _build_ton_message(self, pay_to_address: str, amount_units: int, comment: str) -> dict[str, Any]:
         payload = None
         if comment:
@@ -252,8 +335,7 @@ class TonConnectGateway:
         отправителя вычисляем детерминированным view-запросом к мастер-контракту
         (не требует его приватного ключа — это просто чтение состояния сети).
         """
-        client_cls = ToncenterClient if self._api_provider == "toncenter" else TonapiClient
-        async with client_cls(network=NetworkGlobalID.MAINNET, api_key=self._tonapi_key) as ton:
+        async with self._make_client() as ton:
             sender_jetton_wallet = await get_wallet_address_get_method(
                 client=ton,
                 address=USDT_TON_JETTON_MASTER,
