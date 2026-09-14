@@ -1,0 +1,16 @@
+aiogram>=3.4,<4
+fragment-api-py
+SQLAlchemy>=2.0
+# Обязателен для async-SQLAlchemy: без него движок падает на первом же подключении.
+greenlet
+alembic
+asyncpg
+pydantic-settings
+httpx
+python-dotenv
+apscheduler
+structlog
+# Сервер вебхуков TonConsole (приходит вместе с aiogram, фиксируем явно).
+aiohttp
+# Хранилище FSM для прода: без него состояние диалогов живёт в памяти процесса.
+redis
