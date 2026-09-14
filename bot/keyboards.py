@@ -39,7 +39,7 @@ def asset_choice_kb() -> InlineKeyboardMarkup:
     )
 
 
-def pay_link_kb(deep_link: str | None) -> InlineKeyboardMarkup:
+def pay_link_kb(deep_link: str | None, *, tonconnect_available: bool = False) -> InlineKeyboardMarkup:
     """
     Клавиатура под счётом.
 
@@ -47,9 +47,17 @@ def pay_link_kb(deep_link: str | None) -> InlineKeyboardMarkup:
     и тогда клиент платит по адресу и сумме из текста сообщения. Кнопка
     «я оплатил» остаётся в любом случае — она безопасна, повторные нажатия
     не приводят к повторной выдаче.
+
+    tonconnect_available добавляет отдельную кнопку для оплаты встроенным
+    кошельком Telegram — он не открывается по ссылке deep_link (у него нет
+    ton://-обработчика), только через подключение по протоколу TON Connect.
     """
     rows: list[list[InlineKeyboardButton]] = []
     if deep_link:
-        rows.append([InlineKeyboardButton(text="💳 Оплатить", url=deep_link)])
+        rows.append([InlineKeyboardButton(text="💳 Оплатить (Tonkeeper и т.п.)", url=deep_link)])
+    if tonconnect_available:
+        rows.append(
+            [InlineKeyboardButton(text="🅃 Оплатить кошельком Telegram", callback_data="pay_via_tonconnect")]
+        )
     rows.append([InlineKeyboardButton(text="✅ Я оплатил", callback_data="check_payment")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -90,12 +91,16 @@ async def _handle_invoice_update(
         logger.exception("webhook.processing_failed", invoice_id=invoice_id[:64])
 
 
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+
 def build_webhook_app(
     *,
     session_maker: async_sessionmaker,
     gateway: FragmentGateway,
     tracker: PaymentTrackerClient,
     bot: Bot,
+    public_base_url: str | None = None,
 ) -> web.Application:
     app = web.Application(client_max_size=_MAX_BODY_BYTES)
 
@@ -145,8 +150,24 @@ def build_webhook_app(
     async def handle_health(_: web.Request) -> web.Response:
         return web.json_response({"status": "ok"})
 
+    async def handle_manifest(_: web.Request) -> web.Response:
+        # Нужен ради TON Connect (services.tonconnect_gateway): кошелёк
+        # запрашивает этот файл при подключении, чтобы показать клиенту,
+        # что за приложение просит доступ.
+        base = (public_base_url or "").rstrip("/")
+        return web.json_response(
+            {
+                "url": base,
+                "name": "murcielagobot",
+                "iconUrl": f"{base}/static/icon.png",
+            }
+        )
+
     app.router.add_post(settings.webhook_path, handle_webhook)
     app.router.add_get("/health", handle_health)
+    if public_base_url:
+        app.router.add_get("/tonconnect-manifest.json", handle_manifest)
+        app.router.add_static("/static/", _STATIC_DIR, show_index=False)
     return app
 
 
@@ -156,6 +177,7 @@ async def run_webhook_server(
     gateway: FragmentGateway,
     tracker: PaymentTrackerClient,
     bot: Bot,
+    public_base_url: str | None = None,
 ) -> web.AppRunner:
     """Поднять сервер и вернуть runner, чтобы его можно было аккуратно погасить."""
     app = build_webhook_app(
@@ -163,6 +185,7 @@ async def run_webhook_server(
         gateway=gateway,
         tracker=tracker,
         bot=bot,
+        public_base_url=public_base_url,
     )
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()

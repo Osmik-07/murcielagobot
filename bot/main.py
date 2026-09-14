@@ -29,6 +29,7 @@ from jobs.expire_orders import expire_stale_orders
 from jobs.reconcile_payments import reconcile_payments
 from services.fragment_gateway import FragmentGateway, FragmentGatewayError
 from services.payment_tracker import PaymentTrackerClient
+from services.tonconnect_gateway import TonConnectGateway
 
 logger = structlog.get_logger(__name__)
 
@@ -129,6 +130,20 @@ async def main() -> None:
         timeout=settings.payment_tracker_timeout_seconds,
     )
 
+    # Оплата через встроенный кошелёк Telegram нуждается в публично доступном
+    # манифесте TON Connect — используем тот же домен, что и для вебхука.
+    # Без WEBHOOK_BASE_URL этой кнопки просто не будет (остальные способы
+    # оплаты работают как обычно).
+    tonconnect_gateway = (
+        TonConnectGateway(
+            manifest_url=f"{settings.webhook_base_url}/tonconnect-manifest.json",
+            tonapi_key=settings.tonconsole_api_key.get_secret_value(),
+            api_provider=settings.fragment_api_provider,
+        )
+        if settings.webhook_enabled
+        else None
+    )
+
     bot = Bot(
         token=settings.bot_token.get_secret_value(),
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
@@ -141,6 +156,7 @@ async def main() -> None:
 
     dp["fragment_gateway"] = gateway
     dp["payment_tracker"] = tracker
+    dp["tonconnect_gateway"] = tonconnect_gateway
 
     db_middleware = DBSessionMiddleware(session_maker)
     dp.message.middleware(db_middleware)
@@ -172,6 +188,7 @@ async def main() -> None:
             gateway=gateway,
             tracker=tracker,
             bot=bot,
+            public_base_url=settings.webhook_base_url,
         )
     else:
         logger.warning(

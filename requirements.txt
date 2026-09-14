@@ -14,3 +14,8 @@ structlog
 aiohttp
 # Хранилище FSM для прода: без него состояние диалогов живёт в памяти процесса.
 redis
+# TON Connect: оплата встроенным кошельком Telegram (services.tonconnect_gateway).
+# tonutils и ton_core приходят транзитивно через fragment-api-py, фиксируем явно
+# на случай, если он это поведение поменяет.
+pytonconnect
+tonutils

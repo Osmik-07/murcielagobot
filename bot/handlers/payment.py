@@ -39,6 +39,7 @@ from services.pricing import (
     select_base_price,
     to_minimal_units,
 )
+from services.tonconnect_gateway import TonConnectGateway, TonConnectUnavailableError
 
 logger = structlog.get_logger(__name__)
 
@@ -106,6 +107,7 @@ async def create_order_and_invoice(
     session: AsyncSession,
     fragment_gateway: FragmentGateway,
     payment_tracker: PaymentTrackerClient,
+    tonconnect_gateway: TonConnectGateway | None,
 ) -> None:
     """Выбран способ оплаты: считаем живую цену, создаём заказ и счёт."""
     # Сообщение недоступно (слишком старое) — редактировать нечего.
@@ -142,7 +144,7 @@ async def create_order_and_invoice(
             "У тебя уже есть неоплаченный заказ:\n\n"
             + _invoice_text(existing, pay_to_address=existing.pay_to_address)
             + "\n\nОплати его или дождись истечения срока.",
-            reply_markup=pay_link_kb(None),
+            reply_markup=pay_link_kb(None, tonconnect_available=tonconnect_gateway is not None),
         )
         return
 
@@ -223,7 +225,74 @@ async def create_order_and_invoice(
 
     await callback.message.edit_text(
         _invoice_text(order, pay_to_address=invoice.pay_to_address),
-        reply_markup=pay_link_kb(pay_link),
+        reply_markup=pay_link_kb(pay_link, tonconnect_available=tonconnect_gateway is not None),
+    )
+
+
+@router.callback_query(F.data == "pay_via_tonconnect")
+async def pay_via_tonconnect(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    tonconnect_gateway: TonConnectGateway | None,
+) -> None:
+    """
+    Альтернативный способ инициировать оплату — через встроенный кошелёк
+    Telegram (протокол TON Connect, у него нет ton://-ссылки, см.
+    services.tonconnect_gateway). На статус заказа это никак не влияет:
+    как и обычная кнопка «Оплатить», это просто ещё один способ отправить
+    деньги — выдачу по-прежнему запускает только проверка у TonConsole.
+    """
+    if tonconnect_gateway is None:
+        await callback.answer("Этот способ оплаты сейчас недоступен", show_alert=True)
+        return
+
+    data = await state.get_data()
+    order_id = data.get("order_id")
+    order = None
+    if order_id:
+        order = await get_order(session, order_id)
+    if order is None or order.telegram_user_id != callback.from_user.id:
+        # FSM могла потеряться (рестарт процесса) — ищем в БД, как и в check_payment.
+        order = await get_active_order_for_user(session, callback.from_user.id)
+
+    if order is None or order.status is not OrderStatus.pending or not order.payment_tracker_invoice_id:
+        await callback.answer("Активный счёт не найден. Начни заново: /start", show_alert=True)
+        return
+
+    await callback.answer("Готовлю ссылку для подключения…")
+
+    try:
+        link = await tonconnect_gateway.create_connect_link(str(order.id))
+    except TonConnectUnavailableError as exc:
+        if callback.message is not None:
+            await callback.message.answer(str(exc))
+        return
+    except Exception:  # noqa: BLE001 - клиенту нужен понятный ответ, не трейсбек
+        logger.exception("tonconnect.link_failed", order_id=str(order.id))
+        if callback.message is not None:
+            await callback.message.answer(
+                "Не удалось подготовить оплату через Wallet Telegram. Попробуй другой способ."
+            )
+        return
+
+    if callback.message is not None:
+        await callback.message.answer(
+            "Открой и подтверди подключение кошелька — как только подключишься, "
+            f"сам предложу перевод на нужную сумму:\n{link}\n\n"
+            "Счёт остаётся в силе, если не откроется — можно оплатить другим способом.",
+            disable_web_page_preview=True,
+        )
+
+    tonconnect_gateway.start_payment_flow(
+        str(order.id),
+        bot=callback.bot,
+        telegram_user_id=order.telegram_user_id,
+        asset=order.asset,
+        pay_to_address=order.pay_to_address or "",
+        amount=order.invoice_amount,
+        amount_units=to_minimal_units(order.invoice_amount, order.asset),
+        comment=str(order.id),
     )
 
 
