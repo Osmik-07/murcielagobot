@@ -45,15 +45,36 @@ logger = structlog.get_logger(__name__)
 router = Router(name="payment")
 
 
-def build_ton_deep_link(address: str, amount_nanoton: int, comment: str) -> str:
-    """
-    Запасная ссылка на оплату в нативном TON.
+# Мастер-контракт USDT в сети TON — тот же адрес, что FragmentAPI использует
+# для чтения джеттон-баланса кошелька (USDT_TON_MASTER_ADDRESS).
+USDT_TON_JETTON_MASTER = "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs"
 
-    Используется, только если трекер не отдал свой payment_link. Для USDT такая
-    ссылка не годится: там перевод джеттона, а не нативной монеты, поэтому для
-    USDT-заказов запасного варианта нет — просто показываем адрес и сумму.
+
+def build_pay_deep_link(
+    address: str,
+    amount_units: int,
+    comment: str,
+    *,
+    asset: Asset,
+) -> str:
     """
-    return f"ton://transfer/{address}?amount={amount_nanoton}&text={comment}"
+    Запасная ссылка на оплату — используется, только если трекер сам не отдал
+    payment_link.
+
+    Для TON это обычный ton://transfer. Для USDT (TON) — тот же ton://transfer,
+    но с параметром jetton=<мастер-контракт>: кошелёк сам вычисляет джеттон-адрес
+    получателя и готовит перевод джеттона, а не нативной монеты. Формат общий
+    для любого TON-кошелька, включая встроенный в Telegram (Settings → Wallet) —
+    оба умеют ton:// как для TON, так и для джеттонов.
+
+    amount_units — сумма в минимальных единицах ИМЕННО этого актива (наноТОН
+    для TON, микро-USDT для usdt_ton), не в TON на газ: комиссию кошелёк
+    рассчитывает и списывает сам.
+    """
+    url = f"ton://transfer/{address}?amount={amount_units}&text={comment}"
+    if asset is Asset.usdt_ton:
+        url += f"&jetton={USDT_TON_JETTON_MASTER}"
+    return url
 
 
 def _order_summary(order: Order) -> str:
@@ -188,12 +209,13 @@ async def create_order_and_invoice(
     )
 
     pay_link = invoice.payment_link
-    if not pay_link and asset is Asset.ton and invoice.pay_to_address:
-        # Запасной вариант только для нативного TON.
-        pay_link = build_ton_deep_link(
+    if not pay_link and invoice.pay_to_address:
+        # Запасной вариант — теперь для обоих активов (см. build_pay_deep_link).
+        pay_link = build_pay_deep_link(
             address=invoice.pay_to_address,
-            amount_nanoton=to_minimal_units(invoice_amount, asset),
+            amount_units=to_minimal_units(invoice_amount, asset),
             comment=str(order.id),
+            asset=asset,
         )
 
     await state.update_data(order_id=str(order.id))
