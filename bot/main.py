@@ -22,7 +22,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from bot.config import settings
-from bot.handlers import order, payment, start
+from bot.handlers import start
 from bot.middlewares import DBSessionMiddleware
 from jobs.expire_orders import expire_stale_orders
 from jobs.reconcile_payments import reconcile_payments
@@ -151,9 +151,9 @@ async def main() -> None:
     )
     dp = Dispatcher(storage=build_storage())
 
+    # Роутер один: покупка целиком живёт в Mini App, боту остались
+    # приветствие и уведомления по заказу.
     dp.include_router(start.router)
-    dp.include_router(order.router)
-    dp.include_router(payment.router)
 
     dp["fragment_gateway"] = gateway
     dp["payment_tracker"] = tracker

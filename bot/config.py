@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     payment_tracker_base_url: str = "https://tonconsole.com/api/v1"
     payment_tracker_timeout_seconds: float = 10.0
 
+    # ----------------------------------------------------------------- Mini App
+    # Публичный https-адрес Mini App без хвостового слэша, например
+    # https://app.murcielagonebot.ru. Пусто — кнопки в боте не показываются
+    # (полезно локально, когда фронтенд ещё не собран).
+    miniapp_url: str | None = None
+
     # ------------------------------------------------------------- Вебхук трекера
     # Публичный https-адрес сервиса без хвостового слэша, например https://pay.example.com.
     # Пусто — вебхук выключен, остаются кнопка «проверить оплату» и джоб-сверка.
@@ -173,6 +179,19 @@ class Settings(BaseSettings):
             raise ValueError("ADMIN_CHAT_ID=0 — некорректный чат, оставь пустым или укажи реальный id")
         return value
 
+    @field_validator("miniapp_url")
+    @classmethod
+    def _check_miniapp_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip().rstrip("/")
+        if not value:
+            return None
+        # Telegram открывает Mini App только по https — http не примет сам клиент.
+        if not value.startswith("https://"):
+            raise ValueError("MINIAPP_URL должен начинаться с https://")
+        return value
+
     @field_validator("webhook_base_url")
     @classmethod
     def _check_webhook_base_url(cls, value: str | None) -> str | None:
@@ -219,6 +238,17 @@ class Settings(BaseSettings):
     def alerts_enabled(self) -> bool:
         """Есть ли куда слать алерты о деньгах."""
         return self.admin_chat_id is not None
+
+    @property
+    def miniapp_enabled(self) -> bool:
+        """Показывать ли в боте кнопки, открывающие Mini App."""
+        return self.miniapp_url is not None
+
+    def miniapp_product_url(self, product: str) -> str:
+        """Ссылка на Mini App, открытая сразу на нужном товаре."""
+        if self.miniapp_url is None:
+            raise ValueError("MINIAPP_URL не задан")
+        return f"{self.miniapp_url}/?product={product}"
 
     @property
     def webhook_enabled(self) -> bool:

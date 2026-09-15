@@ -23,7 +23,6 @@ TON Connect (handshake через bridge), и только потом проси
 from __future__ import annotations
 
 import asyncio
-import base64
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -34,7 +33,7 @@ from aiogram import Bot
 from pytonconnect import TonConnect
 from pytonconnect.exceptions import TonConnectError, UserRejectsError
 from pytonconnect.storage import DefaultStorage
-from ton_core import Address, JettonTransferBody, NetworkGlobalID, TextCommentBody, to_nano
+from ton_core import Address
 from tonutils.clients import TonapiClient, ToncenterClient
 from tonutils.contracts.jetton.methods import (
     get_wallet_address_get_method,
@@ -43,6 +42,13 @@ from tonutils.contracts.jetton.methods import (
 
 from db.models import Asset
 from services.pricing import format_amount
+from services.ton_messages import (
+    JETTON_TRANSFER_GAS,
+    USDT_TON_JETTON_MASTER,
+    build_jetton_message,
+    build_ton_message,
+    make_ton_client,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -52,17 +58,13 @@ __all__ = [
     "PaymentOutcome",
 ]
 
-# Тот же мастер-контракт USDT, что и в bot/handlers/payment.py (ton:// ссылка)
-# и в FragmentAPI (чтение баланса). Три места используют одно значение не
-# случайно — расхождение здесь означает перевод не туда.
-USDT_TON_JETTON_MASTER = "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs"
+# Мастер-контракт USDT и газ на джеттон-перевод живут в services.ton_messages —
+# там же, где собираются сами сообщения. Здесь только переэкспорт для обратной
+# совместимости с тем, что уже импортировало эти имена отсюда.
+_JETTON_TRANSFER_GAS = JETTON_TRANSFER_GAS
 
 # Официальный app_name кошелька Telegram в реестре TON Connect.
 _TELEGRAM_WALLET_APP_NAME = "telegram-wallet"
-
-# Газ на джеттон-перевод (комиссия сети + уведомление получателю). Списывается
-# с TON-баланса отправителя сверх суммы USDT — сама сумма USDT в payload.
-_JETTON_TRANSFER_GAS = to_nano("0.05")
 
 # Сколько ждём, пока клиент подключит кошелёк и подтвердит перевод.
 CONNECT_TIMEOUT_SECONDS = 300
@@ -244,8 +246,7 @@ class TonConnectGateway:
             )
 
     def _make_client(self) -> TonapiClient | ToncenterClient:
-        client_cls = ToncenterClient if self._api_provider == "toncenter" else TonapiClient
-        return client_cls(network=NetworkGlobalID.MAINNET, api_key=self._tonapi_key)
+        return make_ton_client(api_key=self._tonapi_key, api_provider=self._api_provider)
 
     async def _check_customer_balance(
         self,
@@ -311,14 +312,7 @@ class TonConnectGateway:
             return None
 
     def _build_ton_message(self, pay_to_address: str, amount_units: int, comment: str) -> dict[str, Any]:
-        payload = None
-        if comment:
-            body = TextCommentBody(comment).serialize()
-            payload = base64.b64encode(body.to_boc()).decode()
-        message: dict[str, Any] = {"address": pay_to_address, "amount": str(amount_units)}
-        if payload:
-            message["payload"] = payload
-        return message
+        return build_ton_message(pay_to_address, amount_units, comment)
 
     async def _build_jetton_message(
         self,
@@ -328,34 +322,14 @@ class TonConnectGateway:
         amount_units: int,
         comment: str,
     ) -> dict[str, Any]:
-        """
-        Сообщение для перевода USDT (TON): адресуется НЕ получателю напрямую,
-        а jetton-кошельку САМОГО отправителя (кастомер) — тот уже сам
-        пересылает джеттоны на jetton-кошелёк получателя. Адрес jetton-кошелька
-        отправителя вычисляем детерминированным view-запросом к мастер-контракту
-        (не требует его приватного ключа — это просто чтение состояния сети).
-        """
-        async with self._make_client() as ton:
-            sender_jetton_wallet = await get_wallet_address_get_method(
-                client=ton,
-                address=USDT_TON_JETTON_MASTER,
-                owner_address=Address(customer_address),
-            )
-
-        forward_payload = TextCommentBody(comment).serialize() if comment else None
-        body = JettonTransferBody(
-            destination=Address(pay_to_address),
-            jetton_amount=amount_units,
-            response_address=Address(customer_address),
-            forward_amount=1,
-            forward_payload=forward_payload,
-        ).serialize()
-
-        return {
-            "address": str(sender_jetton_wallet),
-            "amount": str(_JETTON_TRANSFER_GAS),
-            "payload": base64.b64encode(body.to_boc()).decode(),
-        }
+        return await build_jetton_message(
+            customer_address=customer_address,
+            pay_to_address=pay_to_address,
+            amount_units=amount_units,
+            comment=comment,
+            api_key=self._tonapi_key,
+            api_provider=self._api_provider,
+        )
 
     def start_payment_flow(
         self,

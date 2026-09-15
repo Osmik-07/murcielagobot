@@ -31,6 +31,7 @@ from bot.config import settings
 from db.repository import get_order_by_invoice_id
 from services.fragment_gateway import FragmentGateway
 from services.fulfillment import process_order_payment
+from services.miniapp_api import add_miniapp_routes
 from services.payment_tracker import PaymentTrackerClient, parse_webhook_payload
 
 logger = structlog.get_logger(__name__)
@@ -168,6 +169,10 @@ def build_webhook_app(
     if public_base_url:
         app.router.add_get("/tonconnect-manifest.json", handle_manifest)
         app.router.add_static("/static/", _STATIC_DIR, show_index=False)
+
+    # Mini App живёт в этом же процессе и на этом же порту: ему нужны те же
+    # session_maker/gateway/tracker. Снаружи домены разводит Caddy.
+    add_miniapp_routes(app, session_maker=session_maker, gateway=gateway, tracker=tracker)
     return app
 
 

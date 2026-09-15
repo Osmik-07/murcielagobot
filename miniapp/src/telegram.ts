@@ -1,0 +1,119 @@
+/**
+ * Тонкая типизированная обёртка над window.Telegram.WebApp.
+ *
+ * Почему не SDK-обёртка из npm: этот объект — собственный стабильный API
+ * Telegram, он приходит вместе с telegram-web-app.js и не меняется годами.
+ * Лишняя зависимость здесь дала бы только свой цикл релизов и свои поломки.
+ *
+ * Всё, что тут есть, может отсутствовать: приложение должно открываться и
+ * в обычном браузере (например, когда мы сами проверяем вёрстку), просто
+ * без нативных кнопок.
+ */
+
+interface TelegramWebApp {
+  initData: string;
+  initDataUnsafe?: { user?: { id: number; username?: string; first_name?: string } };
+  colorScheme: 'light' | 'dark';
+  themeParams: Record<string, string>;
+  platform: string;
+  ready(): void;
+  expand(): void;
+  close(): void;
+  MainButton: {
+    setText(text: string): void;
+    show(): void;
+    hide(): void;
+    enable(): void;
+    disable(): void;
+    showProgress(leaveActive?: boolean): void;
+    hideProgress(): void;
+    onClick(cb: () => void): void;
+    offClick(cb: () => void): void;
+    setParams(params: { color?: string; text_color?: string }): void;
+  };
+  BackButton: {
+    show(): void;
+    hide(): void;
+    onClick(cb: () => void): void;
+    offClick(cb: () => void): void;
+  };
+  HapticFeedback?: {
+    impactOccurred(style: 'light' | 'medium' | 'heavy'): void;
+    notificationOccurred(type: 'error' | 'success' | 'warning'): void;
+  };
+}
+
+declare global {
+  interface Window {
+    Telegram?: { WebApp?: TelegramWebApp };
+  }
+}
+
+export const tg = (): TelegramWebApp | undefined => window.Telegram?.WebApp;
+
+/** Строка initData, которой бэкенд подтверждает, кто мы. Пустая вне Telegram. */
+export const initData = (): string => tg()?.initData ?? '';
+
+/** Тема Telegram: приложение подстраивается под неё, а не навязывает свою. */
+export const colorScheme = (): 'light' | 'dark' => tg()?.colorScheme ?? 'light';
+
+/**
+ * С каким товаром открыли приложение: кнопки в боте передают
+ * ?startapp=premium | stars. Если параметра нет — покажем выбор.
+ */
+export function startProduct(): 'premium' | 'stars' | null {
+  const params = new URLSearchParams(window.location.search);
+  // tgWebAppStartParam — когда приложение открыто ссылкой t.me/bot/app?startapp=…
+  // product — когда кнопкой web_app из бота (там URL уходит как есть).
+  const raw = (params.get('tgWebAppStartParam') ?? params.get('product') ?? '').toLowerCase();
+  return raw === 'premium' || raw === 'stars' ? raw : null;
+}
+
+export function haptic(kind: 'tap' | 'success' | 'error'): void {
+  const h = tg()?.HapticFeedback;
+  if (!h) return;
+  if (kind === 'tap') h.impactOccurred('light');
+  else h.notificationOccurred(kind === 'success' ? 'success' : 'error');
+}
+
+/** Нативная кнопка внизу экрана. Возвращает функцию отписки. */
+export function mainButton(opts: {
+  text: string;
+  onClick: () => void;
+  loading?: boolean;
+  disabled?: boolean;
+}): () => void {
+  const app = tg();
+  if (!app) return () => {};
+  const { MainButton } = app;
+  MainButton.setText(opts.text);
+  if (opts.disabled) MainButton.disable();
+  else MainButton.enable();
+  if (opts.loading) MainButton.showProgress(true);
+  else MainButton.hideProgress();
+  MainButton.onClick(opts.onClick);
+  MainButton.show();
+  return () => {
+    MainButton.offClick(opts.onClick);
+    MainButton.hide();
+  };
+}
+
+/** Нативная стрелка «назад» в шапке. Возвращает функцию отписки. */
+export function backButton(onClick: () => void): () => void {
+  const app = tg();
+  if (!app) return () => {};
+  app.BackButton.onClick(onClick);
+  app.BackButton.show();
+  return () => {
+    app.BackButton.offClick(onClick);
+    app.BackButton.hide();
+  };
+}
+
+export function initTelegram(): void {
+  const app = tg();
+  if (!app) return;
+  app.ready();
+  app.expand();
+}

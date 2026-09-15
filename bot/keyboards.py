@@ -1,63 +1,42 @@
-"""Клавиатуры бота."""
+"""
+Клавиатуры бота.
+
+Осталась одна: главное меню. Весь процесс покупки — выбор срока или
+количества, получатель, способ оплаты и сама оплата — живёт в Mini App,
+поэтому клавиатур под диалог больше нет.
+"""
 
 from __future__ import annotations
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+
+from bot.config import settings
 
 
 def main_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="⭐ Telegram Premium", callback_data="product:premium")],
-            [InlineKeyboardButton(text="✨ Telegram Stars", callback_data="product:stars")],
-        ]
-    )
+    """
+    Оба пункта открывают Mini App сразу на нужном товаре.
 
+    Если MINIAPP_URL не задан (локальная разработка без собранного фронтенда),
+    кнопок нет: диалогового запасного пути больше не существует, и рисовать
+    кнопку, которая никуда не ведёт, хуже, чем честно её не показать.
+    """
+    if not settings.miniapp_enabled:
+        return InlineKeyboardMarkup(inline_keyboard=[])
 
-def premium_duration_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="3 месяца", callback_data="duration:3"),
-                InlineKeyboardButton(text="6 месяцев", callback_data="duration:6"),
-                InlineKeyboardButton(text="12 месяцев", callback_data="duration:12"),
+                InlineKeyboardButton(
+                    text="⭐ Telegram Premium",
+                    web_app=WebAppInfo(url=settings.miniapp_product_url("premium")),
+                )
             ],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back:menu")],
-        ]
-    )
-
-
-def asset_choice_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
             [
-                InlineKeyboardButton(text="TON", callback_data="asset:ton"),
-                InlineKeyboardButton(text="USDT (TON)", callback_data="asset:usdt_ton"),
+                InlineKeyboardButton(
+                    text="✨ Telegram Stars",
+                    web_app=WebAppInfo(url=settings.miniapp_product_url("stars")),
+                )
             ],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back:menu")],
         ]
     )
-
-
-def pay_link_kb(deep_link: str | None, *, tonconnect_available: bool = False) -> InlineKeyboardMarkup:
-    """
-    Клавиатура под счётом.
-
-    Ссылка на оплату опциональна: для USDT трекер может не отдать deep-link,
-    и тогда клиент платит по адресу и сумме из текста сообщения. Кнопка
-    «я оплатил» остаётся в любом случае — она безопасна, повторные нажатия
-    не приводят к повторной выдаче.
-
-    tonconnect_available добавляет отдельную кнопку для оплаты встроенным
-    кошельком Telegram — он не открывается по ссылке deep_link (у него нет
-    ton://-обработчика), только через подключение по протоколу TON Connect.
-    """
-    rows: list[list[InlineKeyboardButton]] = []
-    if deep_link:
-        rows.append([InlineKeyboardButton(text="💳 Оплатить (Tonkeeper и т.п.)", url=deep_link)])
-    if tonconnect_available:
-        rows.append(
-            [InlineKeyboardButton(text="🅃 Оплатить кошельком Telegram", callback_data="pay_via_tonconnect")]
-        )
-    rows.append([InlineKeyboardButton(text="✅ Я оплатил", callback_data="check_payment")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)

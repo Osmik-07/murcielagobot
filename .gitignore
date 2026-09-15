@@ -6,3 +6,6 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .cache/
+node_modules/
+miniapp/dist/
+*.tsbuildinfo
