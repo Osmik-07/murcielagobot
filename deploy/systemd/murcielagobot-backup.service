@@ -1,9 +1,0 @@
-[Unit]
-Description=murcielagobot - ежедневный бэкап Postgres
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-User=root
-ExecStart=/opt/murcielagobot/deploy/backup_db.sh
