@@ -85,12 +85,18 @@ cp .env.example .env   # заполнить: BOT_TOKEN, FRAGMENT_WALLET_SEED,
                         # FRAGMENT_WALLET_ADDRESS, TONCONSOLE_API_KEY,
                         # PAYMENT_TRACKER_TOKEN, DATABASE_URL
 
+alembic upgrade head   # схема БД — миграциями, не create_all
 python -m bot.main
 ```
 
-Postgres нужен заранее (схема создаётся сама при первом запуске). Redis
-опционален для локальной разработки — без `REDIS_URL` состояние диалога
-живёт в памяти процесса; заказы и деньги при этом не теряются, они в БД.
+Postgres нужен заранее. Схему создают и обновляют только миграции Alembic
+(`migrations/`) — `alembic upgrade head` перед первым запуском и после
+каждого `git pull`, если менялись модели. Redis опционален для локальной
+разработки — без `REDIS_URL` состояние диалога живёт в памяти процесса;
+заказы и деньги при этом не теряются, они в БД.
+
+Новая миграция после правки моделей: `alembic revision --autogenerate -m "..."`,
+проверить сгенерированный файл руками и применить `alembic upgrade head`.
 
 Без `WEBHOOK_BASE_URL` вебхук выключен, и выдача идёт по кнопке «я оплатил»
 и джобе сверки — для локальной разработки этого достаточно.
@@ -101,7 +107,13 @@ Systemd-юнит от непривилегированного пользова�
 с автоматическим Let's Encrypt, Postgres/Redis в Docker с лимитами памяти.
 Деплой — по пушу в `main`: GitHub Actions подключается по SSH-ключу, который
 на сервере ограничен `authorized_keys`-командой на ровно один скрипт
-(`deploy/deploy.sh`) — что бы CI ни отправил, выполнится только он.
+(`deploy/deploy.sh`) — что бы CI ни отправил, выполнится только он. Сам
+скрипт тянет код, ставит зависимости, прогоняет `alembic upgrade head`
+и только потом перезапускает сервис.
+
+Бэкап Postgres — ежедневно по systemd-таймеру (`deploy/backup_db.sh`),
+сжатый дамп в `/opt/murcielagobot/backups/`, ротация — 14 дней локально
+на диске VPS. Восстановление: `gunzip -c backups/<файл>.sql.gz | docker exec -i murcielagobot-postgres psql -U murcielagobot -d fragmentbot`.
 
 ---
 _Задеплоено автоматически через GitHub Actions при пуше в main._

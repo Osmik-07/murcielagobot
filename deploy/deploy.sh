@@ -12,6 +12,9 @@ git reset --hard origin/main
 echo "==> зависимости"
 ./.venv/bin/pip install --quiet -r requirements.txt
 
+echo "==> миграции БД"
+./.venv/bin/alembic upgrade head
+
 echo "==> рестарт сервиса"
 sudo systemctl restart murcielagobot
 sleep 2

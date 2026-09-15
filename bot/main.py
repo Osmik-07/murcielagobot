@@ -24,7 +24,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from bot.config import settings
 from bot.handlers import order, payment, start
 from bot.middlewares import DBSessionMiddleware
-from db.models import Base
 from jobs.expire_orders import expire_stale_orders
 from jobs.reconcile_payments import reconcile_payments
 from services.fragment_gateway import FragmentGateway, FragmentGatewayError
@@ -111,10 +110,12 @@ async def main() -> None:
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
-    async with engine.begin() as conn:
-        # На старте — create_all. Когда появятся прод-данные, переходить на alembic:
-        # добавление статуса fulfilling потребует ALTER TYPE для нативного enum.
-        await conn.run_sync(Base.metadata.create_all)
+    # Схему БД ведут миграции Alembic (deploy/deploy.sh -> alembic upgrade head
+    # перед рестартом сервиса), не приложение на старте. Раньше здесь стоял
+    # create_all — он не умеет менять уже существующие типы (например, добавить
+    # значение в нативный enum), поэтому один раз, руками, на проде мы сделали
+    # alembic stamp head поверх уже созданной им схемы, а дальше — только миграции.
+    logger.info("db.schema_managed_by_alembic")
 
     gateway = FragmentGateway(
         seed=settings.fragment_wallet_seed.get_secret_value(),
