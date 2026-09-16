@@ -1,4 +1,4 @@
-import { StrictMode } from 'react';
+import { StrictMode, useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AppRoot } from '@telegram-apps/telegram-ui';
 import { TonConnectUIProvider } from '@tonconnect/ui-react';
@@ -7,9 +7,28 @@ import '@telegram-apps/telegram-ui/dist/styles.css';
 import './theme.css';
 
 import { App } from './App';
-import { colorScheme, initTelegram, platform } from './telegram';
+import { initTelegram, onThemeChange, platform, syncTheme } from './telegram';
 
 initTelegram();
+// Тема — до первого рендера, чтобы не мигнуть чужими цветами.
+const initialAppearance = syncTheme();
+
+/** Корень с темой: пересобирает палитру, когда пользователь меняет тему в Telegram. */
+function ThemedRoot({ children }: { children: ReactNode }) {
+  const [appearance, setAppearance] = useState(initialAppearance);
+  useEffect(() => onThemeChange(() => setAppearance(syncTheme())), []);
+  return (
+    <AppRoot
+      appearance={appearance}
+      platform={platform()}
+      // AppRoot сам красит всю страницу: переменные --tgui--* объявлены
+      // именно на нём, поэтому и фон, и текст внутри гарантированно из одной темы.
+      style={{ minHeight: '100vh', background: 'var(--tgui--secondary_bg_color)', color: 'var(--tgui--text_color)' }}
+    >
+      {children}
+    </AppRoot>
+  );
+}
 
 // Манифест отдаёт бэкенд на корне того же домена: кошелёк показывает по нему,
 // какое приложение просит подключение.
@@ -23,15 +42,9 @@ createRoot(document.getElementById('root')!).render(
       // а не остаёмся во внешнем приложении.
       actionsConfiguration={{ twaReturnUrl: 'https://t.me/murcielago_nebot' }}
     >
-      <AppRoot
-        appearance={colorScheme()}
-        platform={platform()}
-        // AppRoot сам красит всю страницу: переменные --tgui--* объявлены
-        // именно на нём, поэтому и фон, и текст внутри гарантированно из одной темы.
-        style={{ minHeight: '100vh', background: 'var(--tgui--secondary_bg_color)' }}
-      >
+      <ThemedRoot>
         <App />
-      </AppRoot>
+      </ThemedRoot>
     </TonConnectUIProvider>
   </StrictMode>,
 );

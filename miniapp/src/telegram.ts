@@ -10,6 +10,8 @@
  * без нативных кнопок.
  */
 
+import { applyPalette, buildPalette, type Appearance } from './theme';
+
 interface TelegramWebApp {
   initData: string;
   initDataUnsafe?: { user?: { id: number; username?: string; first_name?: string } };
@@ -23,6 +25,8 @@ interface TelegramWebApp {
   setHeaderColor?(color: string): void;
   setBackgroundColor?(color: string): void;
   setBottomBarColor?(color: string): void;
+  onEvent?(event: 'themeChanged', cb: () => void): void;
+  offEvent?(event: 'themeChanged', cb: () => void): void;
   MainButton: {
     setText(text: string): void;
     show(): void;
@@ -58,8 +62,37 @@ export const tg = (): TelegramWebApp | undefined => window.Telegram?.WebApp;
 /** Строка initData, которой бэкенд подтверждает, кто мы. Пустая вне Telegram. */
 export const initData = (): string => tg()?.initData ?? '';
 
-/** Тема Telegram: приложение подстраивается под неё, а не навязывает свою. */
-export const colorScheme = (): 'light' | 'dark' => tg()?.colorScheme ?? 'light';
+/**
+ * Применяет тему Telegram (с достройкой недостающих цветов, см. theme.ts)
+ * и возвращает схему, которой должны рисоваться компоненты.
+ */
+export function syncTheme(): Appearance {
+  const app = tg();
+  const fallback: Appearance =
+    app?.colorScheme ?? (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  const { appearance, palette } = buildPalette(app?.themeParams ?? {}, fallback);
+  applyPalette(palette, appearance);
+
+  // Шапка и нижняя панель Telegram — в цвет фона страницы, иначе вокруг
+  // приложения остаётся полоса другого цвета и оно выглядит «вставленным».
+  // Передаём готовый hex, а не ключ темы: ключа у клиента может и не быть.
+  try {
+    app?.setHeaderColor?.(palette.secondary_bg_color);
+    app?.setBackgroundColor?.(palette.secondary_bg_color);
+    app?.setBottomBarColor?.(palette.secondary_bg_color);
+  } catch {
+    // Старый клиент без этих методов — не критично, просто без подкраски.
+  }
+  return appearance;
+}
+
+/** Подписка на смену темы в Telegram (пользователь переключил ночной режим). */
+export function onThemeChange(cb: () => void): () => void {
+  const app = tg();
+  if (!app?.onEvent) return () => {};
+  app.onEvent('themeChanged', cb);
+  return () => app.offEvent?.('themeChanged', cb);
+}
 
 /**
  * С каким товаром открыли приложение: кнопки в боте передают
@@ -126,14 +159,4 @@ export function initTelegram(): void {
   if (!app) return;
   app.ready();
   app.expand();
-
-  // Шапка и нижняя панель Telegram — в цвет фона страницы, иначе вокруг
-  // приложения остаётся полоса другого цвета и оно выглядит «вставленным».
-  try {
-    app.setHeaderColor?.('secondary_bg_color');
-    app.setBackgroundColor?.('secondary_bg_color');
-    app.setBottomBarColor?.('secondary_bg_color');
-  } catch {
-    // Старый клиент без этих методов — не критично, просто без подкраски.
-  }
 }
