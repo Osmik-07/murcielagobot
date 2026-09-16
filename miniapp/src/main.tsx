@@ -7,19 +7,29 @@ import '@telegram-apps/telegram-ui/dist/styles.css';
 import './theme.css';
 
 import { App } from './App';
-import { colorScheme, initTelegram } from './telegram';
+import { colorScheme, initTelegram, platform } from './telegram';
 
 initTelegram();
 
-// Манифест лежит на том же домене, что и приложение: кошелёк показывает
-// по нему, какое приложение просит подключение.
+// Манифест отдаёт бэкенд на корне того же домена: кошелёк показывает по нему,
+// какое приложение просит подключение.
 const MANIFEST_URL = `${window.location.origin}/tonconnect-manifest.json`;
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <TonConnectUIProvider manifestUrl={MANIFEST_URL}>
-      {/* appearance берём из темы клиента — приложение не навязывает свою */}
-      <AppRoot appearance={colorScheme()}>
+    <TonConnectUIProvider
+      manifestUrl={MANIFEST_URL}
+      // После подтверждения в кошельке возвращаемся обратно в Telegram,
+      // а не остаёмся во внешнем приложении.
+      actionsConfiguration={{ twaReturnUrl: 'https://t.me/murcielago_nebot' }}
+    >
+      <AppRoot
+        appearance={colorScheme()}
+        platform={platform()}
+        // AppRoot сам красит всю страницу: переменные --tgui--* объявлены
+        // именно на нём, поэтому и фон, и текст внутри гарантированно из одной темы.
+        style={{ minHeight: '100vh', background: 'var(--tgui--secondary_bg_color)' }}
+      >
         <App />
       </AppRoot>
     </TonConnectUIProvider>

@@ -146,6 +146,24 @@ def _parse_recipient(body: dict[str, Any]) -> str:
     return recipient
 
 
+def _same_order(
+    order: Order,
+    product: ProductType,
+    months: int | None,
+    stars: int | None,
+    asset: Asset,
+    recipient: str,
+) -> bool:
+    """Совпадает ли уже выставленный заказ с тем, что клиент просит сейчас."""
+    return (
+        order.product is product
+        and order.duration_months == months
+        and order.stars_amount == stars
+        and order.asset is asset
+        and order.recipient_username.lower() == recipient.lower()
+    )
+
+
 def _order_public(order: Order) -> dict[str, Any]:
     """Представление заказа для фронтенда. Ничего лишнего наружу."""
     if order.product is ProductType.premium:
@@ -236,10 +254,41 @@ def add_miniapp_routes(
         async with session_maker() as session:
             existing = await get_active_order_for_user(session, user.id)
             if existing is not None and existing.status is OrderStatus.pending:
-                # Два параллельных заказа у одного человека — это два разных
-                # счёта с разными суммами, в которых он сам запутается.
-                return web.json_response(
-                    {"order": _order_public(existing), "reused": True}
+                if _same_order(existing, product, months, stars, asset, recipient):
+                    # Тот же заказ (например, после отказа в кошельке) — не плодим
+                    # второй счёт с другой суммой, отдаём уже выставленный.
+                    return web.json_response(
+                        {"order": _order_public(existing), "reused": True}
+                    )
+
+                # Клиент передумал (другой товар, актив или получатель). Старый
+                # счёт гасим — но только убедившись у трекера, что денег по нему
+                # нет: просрочить оплаченный заказ значит забрать деньги и не
+                # выдать товар. То же правило, что в jobs/expire_orders.py.
+                if existing.payment_tracker_invoice_id:
+                    try:
+                        old_invoice = await tracker.get_invoice(
+                            existing.payment_tracker_invoice_id,
+                            currency=existing.asset.tracker_currency,
+                        )
+                    except PaymentTrackerError as exc:
+                        raise ApiError(
+                            503, "Не удалось проверить прошлый заказ, попробуй чуть позже"
+                        ) from exc
+                    if old_invoice.has_funds:
+                        # Деньги уже пришли — этот заказ выполнится; показываем его.
+                        return web.json_response(
+                            {
+                                "error": "По прошлому заказу уже пришла оплата — он выполняется",
+                                "order": _order_public(existing),
+                            },
+                            status=409,
+                        )
+                await expire_order(session, existing.id)
+                logger.info(
+                    "miniapp.order_replaced",
+                    old_order_id=str(existing.id),
+                    telegram_user_id=user.id,
                 )
 
             try:

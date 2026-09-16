@@ -1,10 +1,42 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Cell, List, Section, Spinner } from '@telegram-apps/telegram-ui';
-import { useTonAddress, useTonConnectModal, useTonConnectUI, useTonWallet } from '@tonconnect/ui-react';
+import { useEffect, useState } from 'react';
+import { Cell, List, Radio, Section, Spinner } from '@telegram-apps/telegram-ui';
+import {
+  useTonAddress,
+  useTonConnectUI,
+  useTonWallet,
+  type WalletInfo,
+} from '@tonconnect/ui-react';
 
-import { api, type Asset, type Order, type PriceEntry, type Product } from '../api';
+import { api, ApiError, type Asset, type Order, type PriceEntry, type Product } from '../api';
+import { approxAmount, months, starsCount } from '../format';
+import { PremiumIcon, StarIcon, TonLogo, UsdtLogo, WalletIcon } from '../icons';
 import { haptic, mainButton } from '../telegram';
-import { StarIcon, PremiumIcon, WalletIcon } from '../icons';
+
+/**
+ * Кошельки, которые показываем списком с логотипами — в этом порядке.
+ * Wallet первым: он встроен в Telegram, и для большинства покупателей это
+ * единственный знакомый кошелёк. Остальные — через «Другой кошелёк».
+ * appName — идентификаторы из официального реестра TON Connect.
+ */
+const FEATURED_WALLETS = ['telegram-wallet', 'tonkeeper'] as const;
+
+/**
+ * Подписи под названием. Названия и логотипы берём из реестра как есть,
+ * а подпись — наша: реестр называет tonkeeper «Keeper» (кошелёк сменил имя),
+ * а многие знают его по старому — так его проще узнать в списке.
+ */
+const WALLET_SUBTITLE: Record<string, string> = {
+  'telegram-wallet': 'Встроен в Telegram',
+  tonkeeper: 'Tonkeeper',
+};
+
+function Chevron() {
+  return (
+    <svg width="8" height="14" viewBox="0 0 8 14" fill="none" style={{ color: 'var(--tgui--hint_color)' }}>
+      <path d="M1 1l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
 interface Props {
   product: Product;
@@ -15,77 +47,95 @@ interface Props {
 }
 
 /**
- * Выбор актива, подключение кошелька и отправка перевода.
+ * Выбор валюты и кошелька, отправка перевода.
  *
- * Важное про деньги: этот экран НЕ решает, оплачен ли заказ. Он только
- * помогает отправить перевод. Оплату подтверждает бэкенд, когда TonConsole
- * реально увидит деньги — поэтому даже если кошелёк соврёт об успехе,
- * товар не выдастся раньше времени.
+ * Этот экран НЕ решает, оплачен ли заказ, — он только помогает отправить
+ * перевод. Оплату подтверждает сервер, когда TonConsole реально увидит деньги,
+ * поэтому даже ложный «успех» от кошелька не выдаст товар раньше времени.
  */
-export function PaymentScreen({ product, months, stars, recipient, onPaid }: Props) {
+export function PaymentScreen({ product, months: period, stars, recipient, onPaid }: Props) {
   const [asset, setAsset] = useState<Asset>('ton');
   const [prices, setPrices] = useState<Record<Asset, PriceEntry> | null>(null);
-  const [order, setOrder] = useState<Order | null>(null);
+  const [wallets, setWallets] = useState<WalletInfo[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [tonConnectUI] = useTonConnectUI();
   const wallet = useTonWallet();
   const address = useTonAddress();
-  const { open: openWalletModal } = useTonConnectModal();
 
-  const summary = useMemo(
-    () => (product === 'premium' ? `Premium на ${months} мес.` : `${stars} Stars`),
-    [product, months, stars],
-  );
+  const title = product === 'premium' ? `Premium · ${months(period!)}` : `${starsCount(stars!)} Stars`;
 
   useEffect(() => {
     let cancelled = false;
     api
-      .price(product === 'premium' ? { product, months } : { product, stars })
+      .price(product === 'premium' ? { product, months: period } : { product, stars })
       .then((r) => !cancelled && setPrices(r.prices))
-      .catch((e) => !cancelled && setError(e.message));
+      .catch((e: Error) => !cancelled && setError(e.message));
     return () => {
       cancelled = true;
     };
-  }, [product, months, stars]);
+  }, [product, period, stars]);
 
-  /**
-   * Заказ создаётся только в момент оплаты, а не при входе на экран: иначе
-   * каждое открытие экрана плодило бы счета, которые никто не оплатит.
-   */
-  async function pay() {
-    if (busy) return;
-    setBusy(true);
+  // Список кошельков и их логотипы — из официального реестра TON Connect,
+  // а не картинками у нас: так логотип всегда актуальный и настоящий.
+  useEffect(() => {
+    let cancelled = false;
+    tonConnectUI
+      .getWallets()
+      .then((all) => {
+        if (cancelled) return;
+        const featured = FEATURED_WALLETS.map((name) => all.find((w) => w.appName === name)).filter(
+          (w): w is WalletInfo => Boolean(w),
+        );
+        setWallets(featured);
+      })
+      .catch(() => !cancelled && setWallets([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [tonConnectUI]);
+
+  async function connect(appName: string | null) {
+    haptic('tap');
     setError(null);
     try {
-      if (!wallet) {
-        openWalletModal();
-        return;
-      }
+      if (wallet) await tonConnectUI.disconnect();
+      if (appName) await tonConnectUI.openSingleWalletModal(appName);
+      else await tonConnectUI.openModal();
+    } catch {
+      // openSingleWalletModal помечен в библиотеке как экспериментальный —
+      // если не сработал, показываем общий список, а не молча ничего.
+      await tonConnectUI.openModal();
+    }
+  }
 
-      const { order: created } = await api.createOrder({
+  async function pay() {
+    if (busy || !wallet) return;
+    setBusy(true);
+    setError(null);
+    let order: Order | null = null;
+    try {
+      ({ order } = await api.createOrder({
         product,
-        months,
+        months: period,
         stars,
         asset,
         recipient,
-      });
-      setOrder(created);
-
-      const tx = await api.orderTx(created.id, address);
-      await tonConnectUI.sendTransaction({
-        validUntil: tx.valid_until,
-        messages: tx.messages,
-      });
-
+      }));
+      const tx = await api.orderTx(order.id, address);
+      await tonConnectUI.sendTransaction({ validUntil: tx.valid_until, messages: tx.messages });
       haptic('success');
-      onPaid(created);
+      onPaid(order);
     } catch (e) {
+      // По прошлому заказу уже пришли деньги — ведём на его статус.
+      if (e instanceof ApiError && e.order) {
+        onPaid(e.order);
+        return;
+      }
       const message = e instanceof Error ? e.message : String(e);
-      // Отказ в кошельке — это не ошибка, человек просто передумал.
-      const rejected = /reject|cancel|decline/i.test(message);
-      if (!rejected) {
+      // Отказ в кошельке — не ошибка: человек передумал, заказ подождёт.
+      if (!/reject|cancel|declin/i.test(message)) {
         haptic('error');
         setError(message);
       }
@@ -94,95 +144,149 @@ export function PaymentScreen({ product, months, stars, recipient, onPaid }: Pro
     }
   }
 
+  const current = prices?.[asset];
+
   useEffect(
     () =>
       mainButton({
-        text: wallet ? 'Оплатить' : 'Подключить кошелёк',
+        text: !wallet
+          ? 'Выбери кошелёк'
+          : current
+            ? `Оплатить ${approxAmount(current.approx, asset)}`
+            : 'Оплатить',
         loading: busy,
-        disabled: !prices,
+        disabled: !wallet || !current,
         onClick: pay,
       }),
-    // pay замыкает актуальные состояния, поэтому переустанавливаем кнопку на их изменение
-    [wallet, busy, prices, asset, recipient, product, months, stars, address],
+    // pay замыкает актуальное состояние — переустанавливаем кнопку на его изменение
+    [wallet, busy, current, asset, address, recipient, product, period, stars],
   );
 
-  const current = prices?.[asset];
+  const connectedInfo = wallet
+    ? wallets?.find((w) => w.appName === wallet.device.appName)
+    : undefined;
 
   return (
     <List>
-      <div style={{ padding: '20px 22px 12px', fontSize: 22, fontWeight: 700 }}>Оплата</div>
-
       <Section header="Заказ">
-        <Cell before={product === 'premium' ? <PremiumIcon size={24} /> : <StarIcon size={24} boxed />}>
-          {summary}
-        </Cell>
-        <Cell after={<span style={{ fontWeight: 500 }}>@{recipient}</span>}>Получатель</Cell>
-      </Section>
-
-      <Section header="Способ оплаты">
-        <div style={{ display: 'flex', gap: 8, padding: '10px 16px' }}>
-          {(['ton', 'usdt_ton'] as const).map((a) => (
-            <button
-              key={a}
-              onClick={() => {
-                haptic('tap');
-                setAsset(a);
-              }}
-              style={{
-                flex: 1,
-                padding: '12px 0',
-                borderRadius: 10,
-                border: 'none',
-                cursor: 'pointer',
-                fontSize: 15,
-                fontWeight: asset === a ? 700 : 500,
-                background:
-                  asset === a ? 'var(--tgui--secondary_fill)' : 'var(--tgui--secondary_bg_color)',
-                color: asset === a ? 'var(--tgui--text_color)' : 'var(--tgui--hint_color)',
-              }}
-            >
-              {a === 'ton' ? 'TON' : 'USDT (TON)'}
-            </button>
-          ))}
-        </div>
-      </Section>
-
-      <Section header="Кошелёк">
         <Cell
-          before={<WalletIcon />}
-          subtitle={
-            wallet
-              ? `${address.slice(0, 6)}…${address.slice(-4)}`
-              : 'Wallet в Telegram, Tonkeeper и другие'
-          }
-          onClick={() => {
-            haptic('tap');
-            if (!wallet) openWalletModal();
-            else void tonConnectUI.disconnect();
-          }}
+          before={product === 'premium' ? <PremiumIcon size={40} /> : <StarIcon size={40} boxed />}
+          subtitle={`для @${recipient}`}
         >
-          {wallet ? 'Кошелёк подключён' : 'Подключить кошелёк'}
+          {title}
         </Cell>
       </Section>
 
-      <div style={{ textAlign: 'center', padding: '18px 22px 8px' }}>
-        <div style={{ fontSize: 13, opacity: 0.6, marginBottom: 4 }}>К оплате</div>
-        {current ? (
-          <>
-            <div style={{ fontSize: 38, fontWeight: 700, letterSpacing: '-0.01em' }}>
-              {current.approx_formatted.replace(/\s\S+$/, '')}
-            </div>
-            <div style={{ fontSize: 16, fontWeight: 600, opacity: 0.8, marginTop: 2 }}>
-              {current.label}
-            </div>
-            <div style={{ fontSize: 12, opacity: 0.5, marginTop: 8 }}>
-              Точная сумма к переводу появится в кошельке — по ней мы и находим платёж.
-            </div>
-          </>
+      <Section header="Валюта">
+        {(['ton', 'usdt_ton'] as const).map((a) => (
+          <Cell
+            key={a}
+            Component="label"
+            before={a === 'ton' ? <TonLogo /> : <UsdtLogo />}
+            subtitle={a === 'ton' ? 'Toncoin' : 'Tether, сеть TON'}
+            after={
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                {prices ? (
+                  <span style={{ color: 'var(--tgui--hint_color)' }}>
+                    {approxAmount(prices[a].approx, a)}
+                  </span>
+                ) : (
+                  <Spinner size="s" />
+                )}
+                <Radio
+                  name="asset"
+                  checked={asset === a}
+                  onChange={() => {
+                    haptic('tap');
+                    setAsset(a);
+                  }}
+                />
+              </div>
+            }
+          >
+            {a === 'ton' ? 'TON' : 'USDT'}
+          </Cell>
+        ))}
+      </Section>
+
+      <Section
+        header="Кошелёк"
+        footer={
+          wallet
+            ? 'Нажми на кошелёк, чтобы подключить другой.'
+            : 'Кошелёк откроется, чтобы подтвердить перевод. Ключи остаются у тебя.'
+        }
+      >
+        {wallet ? (
+          <Cell
+            before={
+              connectedInfo ? (
+                <img className="wallet-logo" src={connectedInfo.imageUrl} alt="" />
+              ) : (
+                <WalletIcon size={40} />
+              )
+            }
+            subtitle={`${address.slice(0, 6)}…${address.slice(-6)}`}
+            after={<span style={{ color: 'var(--tgui--link_color)' }}>Сменить</span>}
+            onClick={() => connect(null)}
+          >
+            {connectedInfo?.name ?? 'Кошелёк подключён'}
+          </Cell>
+        ) : wallets === null ? (
+          <Cell before={<Spinner size="m" />}>Загружаем кошельки…</Cell>
         ) : (
-          <Spinner size="m" />
+          // Массивом, а не фрагментом: Section ставит разделители между
+          // своими прямыми детьми, а фрагмент для неё — один ребёнок.
+          [
+            ...wallets.map((w) => (
+              <Cell
+                key={w.appName}
+                before={<img className="wallet-logo" src={w.imageUrl} alt="" />}
+                subtitle={WALLET_SUBTITLE[w.appName]}
+                after={<Chevron />}
+                onClick={() => connect(w.appName)}
+              >
+                {w.name}
+              </Cell>
+            )),
+            <Cell
+              key="other"
+              before={
+                <div
+                  className="wallet-logo"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: 'var(--tgui--secondary_bg_color)',
+                    color: 'var(--tgui--link_color)',
+                  }}
+                >
+                  <WalletIcon size={22} />
+                </div>
+              }
+              subtitle="MyTonWallet и другие"
+              after={<Chevron />}
+              onClick={() => connect(null)}
+            >
+              Другой кошелёк
+            </Cell>,
+          ]
         )}
-      </div>
+      </Section>
+
+      {current && (
+        <div className="amount-hero">
+          <div style={{ fontSize: 14, color: 'var(--tgui--hint_color)', marginBottom: 6 }}>
+            К оплате
+          </div>
+          <div className="amount-hero__value">≈ {approxAmount(current.approx, asset).replace(/\s\S+$/, '')}</div>
+          <div className="amount-hero__asset">{asset === 'ton' ? 'TON' : 'USDT'}</div>
+          <div style={{ fontSize: 13, color: 'var(--tgui--hint_color)', marginTop: 10 }}>
+            Точная сумма будет в кошельке — по ней мы находим платёж.
+          </div>
+        </div>
+      )}
 
       {error && (
         <Section>
@@ -190,12 +294,6 @@ export function PaymentScreen({ product, months, stars, recipient, onPaid }: Pro
             {error}
           </Cell>
         </Section>
-      )}
-
-      {order && !error && (
-        <div style={{ textAlign: 'center', fontSize: 13, opacity: 0.5, paddingBottom: 12 }}>
-          Заказ создан, ждём подтверждение в кошельке
-        </div>
       )}
     </List>
   );

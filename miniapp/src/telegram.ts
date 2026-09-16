@@ -19,6 +19,10 @@ interface TelegramWebApp {
   ready(): void;
   expand(): void;
   close(): void;
+  // Есть не во всех версиях клиента — вызываем только после проверки.
+  setHeaderColor?(color: string): void;
+  setBackgroundColor?(color: string): void;
+  setBottomBarColor?(color: string): void;
   MainButton: {
     setText(text: string): void;
     show(): void;
@@ -111,9 +115,25 @@ export function backButton(onClick: () => void): () => void {
   };
 }
 
+/** Вид компонентов: на iOS — iOS-стиль, иначе базовый (Android/desktop). */
+export const platform = (): 'ios' | 'base' => {
+  const p = tg()?.platform ?? '';
+  return p === 'ios' || p === 'macos' ? 'ios' : 'base';
+};
+
 export function initTelegram(): void {
   const app = tg();
   if (!app) return;
   app.ready();
   app.expand();
+
+  // Шапка и нижняя панель Telegram — в цвет фона страницы, иначе вокруг
+  // приложения остаётся полоса другого цвета и оно выглядит «вставленным».
+  try {
+    app.setHeaderColor?.('secondary_bg_color');
+    app.setBackgroundColor?.('secondary_bg_color');
+    app.setBottomBarColor?.('secondary_bg_color');
+  } catch {
+    // Старый клиент без этих методов — не критично, просто без подкраски.
+  }
 }

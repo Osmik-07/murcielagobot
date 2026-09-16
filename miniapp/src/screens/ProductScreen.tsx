@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Cell, List, Section, Spinner, Badge } from '@telegram-apps/telegram-ui';
+import { Badge, Cell, List, Placeholder, Radio, Section, Spinner } from '@telegram-apps/telegram-ui';
 
 import { api, type PriceEntry, type Product } from '../api';
+import { approxAmount, discountPercent, months, starsCount } from '../format';
+import { PremiumIcon, StarIcon, TonLogo, UsdtLogo } from '../icons';
 import { haptic, mainButton } from '../telegram';
-import { PremiumIcon, StarIcon } from '../icons';
 
-const MONTHS = [3, 6, 12] as const;
+const PREMIUM_PERIODS = [3, 6, 12] as const;
 const STAR_PRESETS = [50, 100, 500, 1000] as const;
+const STARS_MIN = 50;
+const STARS_MAX = 100_000;
 
-type Prices = Record<number, Record<string, PriceEntry>>;
+type PriceMap = Record<number, Record<'ton' | 'usdt_ton', PriceEntry>>;
 
 interface Props {
   product: Product;
@@ -18,241 +21,218 @@ interface Props {
 /**
  * Выбор срока (Premium) или количества (Stars).
  *
- * Цены тянутся с сервера по каждому варианту — никаких зашитых чисел на
- * клиенте: цена Fragment живая и меняется.
+ * Все цены — с сервера, в реальном времени: у клиента нет ни одной зашитой
+ * цифры, потому что цена Fragment меняется.
  */
 export function ProductScreen({ product, onNext }: Props) {
   const isPremium = product === 'premium';
   const [selected, setSelected] = useState<number>(isPremium ? 12 : 500);
-  const [prices, setPrices] = useState<Prices>({});
-  const [loading, setLoading] = useState(true);
+  const [prices, setPrices] = useState<PriceMap>({});
   const [error, setError] = useState<string | null>(null);
 
-  // Premium: грузим цены сразу по всем трём срокам, чтобы показать их списком.
-  // Stars: только по выбранному количеству — вариантов слишком много.
+  // Premium: сразу все три срока — они показываются списком и нужны для скидки.
+  // Stars: только выбранное количество, вариантов слишком много.
   useEffect(() => {
     let cancelled = false;
-    const wanted = isPremium ? [...MONTHS] : [selected];
+    const wanted = isPremium ? [...PREMIUM_PERIODS] : [selected];
+    const missing = wanted.filter((v) => !prices[v]);
+    if (missing.length === 0) return;
 
-    setLoading(true);
     setError(null);
     Promise.all(
-      wanted.map((value) =>
+      missing.map((value) =>
         api
           .price(isPremium ? { product, months: value } : { product, stars: value })
           .then((r) => [value, r.prices] as const),
       ),
     )
       .then((entries) => {
-        if (cancelled) return;
-        setPrices((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
+        if (!cancelled) setPrices((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
       })
-      .catch((e) => !cancelled && setError(e.message))
-      .finally(() => !cancelled && setLoading(false));
+      .catch((e: Error) => !cancelled && setError(e.message));
 
     return () => {
       cancelled = true;
     };
+    // prices намеренно не в зависимостях: иначе каждая загрузка перезапускала бы эффект.
   }, [product, isPremium, selected]);
+
+  const ready = Boolean(prices[selected]);
 
   useEffect(
     () =>
       mainButton({
         text: 'Продолжить',
-        disabled: loading || !!error,
+        disabled: !ready,
         onClick: () => {
           haptic('tap');
           onNext(isPremium ? { months: selected } : { stars: selected });
         },
       }),
-    [loading, error, selected, isPremium, onNext],
+    [ready, selected, isPremium, onNext],
   );
 
-  const priceLine = (value: number) => {
-    const entry = prices[value];
-    if (!entry) return <Spinner size="s" />;
-    return (
-      <div style={{ textAlign: 'right' }}>
-        <div style={{ fontWeight: 600 }}>{entry.ton.approx_formatted}</div>
-        <div style={{ fontSize: 13, opacity: 0.6 }}>≈ {entry.usdt_ton.approx_formatted}</div>
-      </div>
-    );
+  const choose = (value: number) => {
+    haptic('tap');
+    setSelected(value);
   };
 
   if (error) {
     return (
       <List>
-        <Section header="Не получилось">
-          <Cell multiline description={error}>
-            Цена недоступна
-          </Cell>
-        </Section>
+        <Placeholder header="Цена недоступна" description={error} />
       </List>
     );
   }
 
   return (
     <List>
-      <div style={{ padding: '20px 22px 4px', display: 'flex', alignItems: 'center', gap: 10 }}>
-        {isPremium ? <PremiumIcon /> : <StarIcon size={32} boxed />}
-        <div style={{ fontSize: 22, fontWeight: 700 }}>
-          {isPremium ? 'Telegram Premium' : 'Telegram Stars'}
-        </div>
-      </div>
-      <div style={{ padding: '0 22px 8px', fontSize: 15, opacity: 0.6 }}>
-        Напрямую через Fragment, без посредников.
-      </div>
+      <Placeholder
+        header={isPremium ? 'Telegram Premium' : 'Telegram Stars'}
+        description="Подарок напрямую через Fragment"
+      >
+        {isPremium ? <PremiumIcon size={88} /> : <StarIcon size={88} boxed />}
+      </Placeholder>
 
       {isPremium ? (
-        <Section header="Выбери срок">
-          {MONTHS.map((m) => (
-            <Cell
-              key={m}
-              Component="label"
-              onClick={() => {
-                haptic('tap');
-                setSelected(m);
-              }}
-              before={<Radio checked={selected === m} />}
-              after={priceLine(m)}
-              titleBadge={m === 12 ? <Badge type="number">−15%</Badge> : undefined}
-            >
-              {m} мес.
-            </Cell>
-          ))}
-        </Section>
+        <PremiumPeriods prices={prices} selected={selected} onSelect={choose} />
       ) : (
-        <>
-          <Stepper value={selected} onChange={setSelected} />
-          <Section header="Быстрый выбор">
-            <div style={{ display: 'flex', gap: 8, padding: '8px 16px 12px' }}>
-              {STAR_PRESETS.map((p) => (
-                <button
-                  key={p}
-                  onClick={() => {
-                    haptic('tap');
-                    setSelected(p);
-                  }}
-                  style={{
-                    flex: 1,
-                    padding: '10px 0',
-                    borderRadius: 10,
-                    border: selected === p ? '1.5px solid var(--tgui--link_color)' : '1.5px solid transparent',
-                    background: 'var(--tgui--secondary_bg_color)',
-                    color: selected === p ? 'var(--tgui--link_color)' : 'var(--tgui--hint_color)',
-                    fontWeight: selected === p ? 700 : 500,
-                    fontSize: 15,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-          </Section>
-          <div style={{ textAlign: 'center', padding: '0 22px 12px', fontSize: 15, opacity: 0.7 }}>
-            {loading || !prices[selected] ? (
-              <Spinner size="s" />
-            ) : (
-              <>
-                ≈ {prices[selected].ton.approx_formatted} · {prices[selected].usdt_ton.approx_formatted}
-              </>
-            )}
-          </div>
-        </>
+        <StarsAmount prices={prices} selected={selected} onSelect={choose} />
       )}
     </List>
   );
 }
 
-function Radio({ checked }: { checked: boolean }) {
-  return (
-    <div
-      style={{
-        width: 22,
-        height: 22,
-        borderRadius: '50%',
-        border: checked ? 'none' : '1.5px solid var(--tgui--hint_color)',
-        background: checked ? 'var(--tgui--link_color)' : 'transparent',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-    >
-      {checked && (
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-          <path d="M5 13L10 18L20 6" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      )}
-    </div>
-  );
-}
-
-/** Степпер количества Stars: крупная цифра между «−» и «+». */
-function Stepper({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  const step = value >= 1000 ? 500 : value >= 200 ? 100 : 50;
-  const clamp = (v: number) => Math.max(50, Math.min(100_000, v));
+function PremiumPeriods({
+  prices,
+  selected,
+  onSelect,
+}: {
+  prices: PriceMap;
+  selected: number;
+  onSelect: (months: number) => void;
+}) {
+  const baseline = prices[3]?.ton.base;
 
   return (
-    <Section>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 22,
-          padding: '22px 16px',
-        }}
-      >
-        <RoundButton
-          label="−"
-          onClick={() => {
-            haptic('tap');
-            onChange(clamp(value - step));
-          }}
-        />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 150, justifyContent: 'center' }}>
-          <StarIcon size={26} />
-          <span style={{ fontSize: 38, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
-        </div>
-        <RoundButton
-          label="+"
-          primary
-          onClick={() => {
-            haptic('tap');
-            onChange(clamp(value + step));
-          }}
-        />
-      </div>
+    <Section header="Срок подписки" footer="Цена Fragment в реальном времени, с учётом комиссии сервиса.">
+      {PREMIUM_PERIODS.map((period) => {
+        const entry = prices[period];
+        const discount =
+          entry && baseline && period !== 3
+            ? discountPercent(entry.ton.base, period, baseline, 3)
+            : null;
+
+        return (
+          <Cell
+            key={period}
+            Component="label"
+            before={
+              <Radio
+                name="premium-period"
+                checked={selected === period}
+                onChange={() => onSelect(period)}
+              />
+            }
+            titleBadge={discount ? <Badge type="number">−{discount}%</Badge> : undefined}
+            subtitle={
+              entry ? `${approxAmount(String(Number(entry.ton.approx) / period), 'ton')} в месяц` : ' '
+            }
+            after={
+              entry ? (
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontWeight: 600, color: 'var(--tgui--text_color)' }}>
+                    {approxAmount(entry.ton.approx, 'ton')}
+                  </div>
+                  <div style={{ fontSize: 14, color: 'var(--tgui--hint_color)' }}>
+                    {approxAmount(entry.usdt_ton.approx, 'usdt_ton')}
+                  </div>
+                </div>
+              ) : (
+                <Spinner size="s" />
+              )
+            }
+          >
+            {months(period)}
+          </Cell>
+        );
+      })}
     </Section>
   );
 }
 
-function RoundButton({
-  label,
-  onClick,
-  primary,
+function StarsAmount({
+  prices,
+  selected,
+  onSelect,
 }: {
-  label: string;
-  onClick: () => void;
-  primary?: boolean;
+  prices: PriceMap;
+  selected: number;
+  onSelect: (stars: number) => void;
 }) {
+  const step = selected >= 1000 ? 500 : selected >= 200 ? 100 : 50;
+  const entry = prices[selected];
+
   return (
-    <button
-      onClick={onClick}
-      style={{
-        width: 44,
-        height: 44,
-        borderRadius: '50%',
-        border: 'none',
-        cursor: 'pointer',
-        fontSize: 22,
-        fontWeight: 500,
-        background: primary ? 'var(--tgui--link_color)' : 'var(--tgui--secondary_bg_color)',
-        color: primary ? '#fff' : 'var(--tgui--text_color)',
-      }}
-    >
-      {label}
-    </button>
+    <>
+      <Section footer={`От ${starsCount(STARS_MIN)} до ${starsCount(STARS_MAX)} за один заказ`}>
+        <div className="stepper">
+          <button
+            className="stepper__button"
+            aria-label="Меньше"
+            disabled={selected <= STARS_MIN}
+            onClick={() => onSelect(Math.max(STARS_MIN, selected - step))}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <path d="M5 12H19" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+            </svg>
+          </button>
+          <div className="stepper__value">
+            <StarIcon size={30} />
+            {starsCount(selected)}
+          </div>
+          <button
+            className="stepper__button"
+            aria-label="Больше"
+            disabled={selected >= STARS_MAX}
+            onClick={() => onSelect(Math.min(STARS_MAX, selected + step))}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <path d="M12 5V19M5 12H19" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+      </Section>
+
+      <Section header="Популярное">
+        <div className="presets">
+          {STAR_PRESETS.map((preset) => (
+            <button
+              key={preset}
+              className="preset"
+              aria-pressed={selected === preset}
+              onClick={() => onSelect(preset)}
+            >
+              {starsCount(preset)}
+            </button>
+          ))}
+        </div>
+      </Section>
+
+      <Section header="Стоимость">
+        <Cell
+          before={<TonLogo size={32} />}
+          after={entry ? <b>{approxAmount(entry.ton.approx, 'ton')}</b> : <Spinner size="s" />}
+        >
+          В TON
+        </Cell>
+        <Cell
+          before={<UsdtLogo size={32} />}
+          after={entry ? <b>{approxAmount(entry.usdt_ton.approx, 'usdt_ton')}</b> : <Spinner size="s" />}
+        >
+          В USDT
+        </Cell>
+      </Section>
+    </>
   );
 }

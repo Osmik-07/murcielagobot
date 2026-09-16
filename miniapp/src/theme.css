@@ -1,20 +1,143 @@
-/* Цвета берём из темы Telegram — приложение подстраивается под клиент,
-   а не навязывает свою палитру. telegram-ui читает те же переменные. */
-:root {
-  --page-bg: var(--tgui--secondary_bg_color, #f2f2f7);
-}
-
-html, body, #root {
+/*
+ * Цвета страницы — ТОЛЬКО из переменных, которые кладёт на :root сам
+ * Telegram (telegram-web-app.js): --tg-theme-*.
+ *
+ * Не --tgui--*: библиотека объявляет их на своём внутреннем классе, а не
+ * на :root, поэтому у html/body они не определены и тихо падают в запасной
+ * цвет. Ровно так и получился светлый фон под тёмными карточками и белым
+ * текстом в тёмной теме.
+ *
+ * Запасные значения — только для открытия вне Telegram (проверка вёрстки).
+ */
+html,
+body {
   margin: 0;
   min-height: 100%;
-  background: var(--page-bg);
+  background: var(--tg-theme-secondary-bg-color, #efeff4);
+  color: var(--tg-theme-text-color, #000);
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  /* Место под нативную MainButton, чтобы контент под неё не уезжал */
-  padding-bottom: env(safe-area-inset-bottom);
+  /* Библиотека задаёт шрифт только своим компонентам — всё, что мы рисуем
+     сами (степпер, пресеты), без этого уходит в шрифт webview по умолчанию,
+     то есть в Times с засечками. */
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Helvetica,
+    Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
 }
 
-button { font-family: inherit; }
+#root {
+  min-height: 100vh;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* Логотипы кошельков из реестра TON Connect квадратные и без скругления —
+   скругляем сами, как иконки приложений в Telegram. */
+.wallet-logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  object-fit: cover;
+  display: block;
+}
+
+.asset-logo {
+  width: 40px;
+  height: 40px;
+  display: block;
+}
+
+.hero-icon {
+  width: 88px;
+  height: 88px;
+  border-radius: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.amount-hero {
+  text-align: center;
+  padding: 8px 16px 20px;
+}
+
+.amount-hero__value {
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--tgui--text_color);
+  font-variant-numeric: tabular-nums;
+}
+
+.amount-hero__asset {
+  margin-top: 4px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--tgui--hint_color);
+}
+
+.presets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 16px 16px;
+}
+
+.preset {
+  height: 44px;
+  border-radius: 12px;
+  border: 2px solid transparent;
+  background: var(--tgui--secondary_bg_color);
+  color: var(--tgui--text_color);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.preset[aria-pressed='true'] {
+  border-color: var(--tgui--button_color);
+  color: var(--tgui--button_color);
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+}
+
+.stepper__button {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--tgui--secondary_bg_color);
+  color: var(--tgui--button_color);
+}
+
+.stepper__button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.stepper__value {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 40px;
+  font-weight: 700;
+  color: var(--tgui--text_color);
+  font-variant-numeric: tabular-nums;
+}

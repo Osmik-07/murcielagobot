@@ -41,9 +41,17 @@ export interface TxRequest {
   messages: Array<{ address: string; amount: string; payload?: string }>;
 }
 
-/** Ошибка, текст которой уже пригоден для показа клиенту. */
+/**
+ * Ошибка, текст которой уже пригоден для показа клиенту.
+ * order — если сервер вместе с отказом вернул заказ, к которому надо перейти
+ * (например, по прошлому заказу уже пришла оплата).
+ */
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly order?: Order,
+  ) {
     super(message);
   }
 }
@@ -71,9 +79,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
-    const message =
-      (body as { error?: string } | null)?.error ?? 'Что-то пошло не так, попробуй ещё раз.';
-    throw new ApiError(message, response.status);
+    const payload = body as { error?: string; order?: Order } | null;
+    const message = payload?.error ?? 'Что-то пошло не так, попробуй ещё раз.';
+    throw new ApiError(message, response.status, payload?.order);
   }
   return body as T;
 }

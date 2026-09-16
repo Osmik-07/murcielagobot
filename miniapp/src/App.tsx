@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Cell, List, Section, Spinner } from '@telegram-apps/telegram-ui';
+import { Cell, List, Placeholder, Section, Spinner } from '@telegram-apps/telegram-ui';
 
 import { api, type Order, type Product } from './api';
+import { months, starsCount } from './format';
 import { PremiumIcon, StarIcon } from './icons';
+import { PaymentScreen } from './screens/PaymentScreen';
 import { ProductScreen } from './screens/ProductScreen';
 import { RecipientScreen } from './screens/RecipientScreen';
-import { PaymentScreen } from './screens/PaymentScreen';
 import { StatusScreen } from './screens/StatusScreen';
 import { backButton, haptic, startProduct } from './telegram';
 
@@ -17,34 +18,31 @@ type Step =
   | { name: 'payment'; product: Product; months?: number; stars?: number; recipient: string }
   | { name: 'status'; order: Order };
 
+const firstStep = (): Step => {
+  const product = startProduct();
+  return product ? { name: 'product', product } : { name: 'pick-product' };
+};
+
 /**
- * Поток — линейный мастер, поэтому состояние экрана хранится обычным
- * useState, без роутера: у Mini App нет адресной строки, а «назад» — это
- * нативная кнопка Telegram, которую мы ведём сами.
+ * Поток — линейный мастер, поэтому экран хранится обычным useState, без
+ * роутера: адресной строки у Mini App нет, а «назад» — нативная кнопка Telegram.
  */
 export function App() {
   const [step, setStep] = useState<Step>({ name: 'loading' });
 
-  // При открытии проверяем, нет ли у человека незакрытого заказа: если есть,
-  // сразу показываем его статус, а не заставляем оформлять заново.
+  // Сразу на статус ведём только заказ, который уже оплачен и выполняется.
+  // Неоплаченный (pending) — нет: со статуса «ждём оплату» оплатить нельзя, и
+  // человек застрял бы на спиннере. Он пройдёт поток заново, а сервер сам
+  // переиспользует тот же счёт или погасит его, если параметры поменялись.
   useEffect(() => {
     let cancelled = false;
     api
       .activeOrder()
       .then(({ order }) => {
         if (cancelled) return;
-        if (order) {
-          setStep({ name: 'status', order });
-          return;
-        }
-        const product = startProduct();
-        setStep(product ? { name: 'product', product } : { name: 'pick-product' });
+        setStep(order && order.status !== 'pending' ? { name: 'status', order } : firstStep());
       })
-      .catch(() => {
-        if (cancelled) return;
-        const product = startProduct();
-        setStep(product ? { name: 'product', product } : { name: 'pick-product' });
-      });
+      .catch(() => !cancelled && setStep(firstStep()));
     return () => {
       cancelled = true;
     };
@@ -54,6 +52,8 @@ export function App() {
     haptic('tap');
     setStep((current) => {
       switch (current.name) {
+        case 'product':
+          return startProduct() ? current : { name: 'pick-product' };
         case 'recipient':
           return { name: 'product', product: current.product };
         case 'payment':
@@ -69,43 +69,38 @@ export function App() {
     });
   }, []);
 
-  // Нативная стрелка «назад» показывается только там, где есть куда вернуться.
-  useEffect(() => {
-    if (step.name !== 'recipient' && step.name !== 'payment') return;
-    return backButton(goBack);
-  }, [step.name, goBack]);
+  // Стрелка «назад» только там, где есть куда вернуться.
+  const canGoBack =
+    step.name === 'recipient' ||
+    step.name === 'payment' ||
+    (step.name === 'product' && !startProduct());
+  useEffect(() => (canGoBack ? backButton(goBack) : undefined), [canGoBack, goBack]);
 
-  const restart = useCallback(() => {
-    const product = startProduct();
-    setStep(product ? { name: 'product', product } : { name: 'pick-product' });
-  }, []);
+  const restart = useCallback(() => setStep(firstStep()), []);
 
   switch (step.name) {
     case 'loading':
       return (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 64 }}>
+        <Placeholder>
           <Spinner size="l" />
-        </div>
+        </Placeholder>
       );
 
     case 'pick-product':
       return (
         <List>
-          <div style={{ padding: '24px 22px 6px', fontSize: 22, fontWeight: 700 }}>Что покупаем?</div>
-          <div style={{ padding: '0 22px 8px', fontSize: 15, opacity: 0.6 }}>
-            Оплата в TON или USDT напрямую, без посредников.
-          </div>
+          <Placeholder header="Что покупаем?" description="Оплата в TON или USDT напрямую, без посредников" />
           <Section>
             <Cell
-              before={<PremiumIcon />}
-              subtitle="Подписка на 3, 6 или 12 месяцев"
+              before={<PremiumIcon size={40} />}
+              subtitle="На 3, 6 или 12 месяцев"
               onClick={() => setStep({ name: 'product', product: 'premium' })}
             >
               Telegram Premium
             </Cell>
             <Cell
-              before={<StarIcon size={32} boxed />}
-              subtitle="От 50 штук, любому получателю"
+              before={<StarIcon size={40} boxed />}
+              subtitle="От 50 штук любому получателю"
               onClick={() => setStep({ name: 'product', product: 'stars' })}
             >
               Telegram Stars
@@ -119,12 +114,7 @@ export function App() {
         <ProductScreen
           product={step.product}
           onNext={(choice) =>
-            setStep({
-              name: 'recipient',
-              product: step.product,
-              months: choice.months,
-              stars: choice.stars,
-            })
+            setStep({ name: 'recipient', product: step.product, months: choice.months, stars: choice.stars })
           }
         />
       );
@@ -132,8 +122,11 @@ export function App() {
     case 'recipient':
       return (
         <RecipientScreen
-          summary={
-            step.product === 'premium' ? `Premium на ${step.months} мес.` : `${step.stars} Stars`
+          premium={step.product === 'premium'}
+          title={
+            step.product === 'premium'
+              ? `Telegram Premium · ${months(step.months!)}`
+              : `${starsCount(step.stars!)} Telegram Stars`
           }
           onNext={(recipient) =>
             setStep({

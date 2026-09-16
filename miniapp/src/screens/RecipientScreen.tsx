@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Input, List, Section } from '@telegram-apps/telegram-ui';
+import { Cell, Input, List, Section } from '@telegram-apps/telegram-ui';
 
+import { PremiumIcon, StarIcon } from '../icons';
 import { haptic, mainButton } from '../telegram';
 
 // То же правило, что на сервере (services/miniapp_api.py) и в шлюзе Fragment.
@@ -8,15 +9,16 @@ import { haptic, mainButton } from '../telegram';
 const USERNAME_RE = /^[A-Za-z][A-Za-z0-9_]{2,30}[A-Za-z0-9]$/;
 
 interface Props {
-  summary: string;
+  title: string;
+  premium: boolean;
   onNext: (recipient: string) => void;
 }
 
-export function RecipientScreen({ summary, onNext }: Props) {
+export function RecipientScreen({ title, premium, onNext }: Props) {
   const [value, setValue] = useState('');
   const clean = value.trim().replace(/^@+/, '');
   const valid = USERNAME_RE.test(clean);
-  // Не ругаемся, пока человек не начал печатать что-то осмысленное.
+  // Не ругаемся, пока человек не ввёл хоть что-то осмысленное.
   const showError = clean.length >= 3 && !valid;
 
   useEffect(
@@ -34,25 +36,29 @@ export function RecipientScreen({ summary, onNext }: Props) {
 
   return (
     <List>
-      <div style={{ padding: '20px 22px 4px', fontSize: 22, fontWeight: 700 }}>Кому дарим?</div>
-      <div style={{ padding: '0 22px 8px', fontSize: 15, opacity: 0.6 }}>{summary}</div>
+      <Section header="Заказ">
+        <Cell before={premium ? <PremiumIcon size={40} /> : <StarIcon size={40} boxed />}>{title}</Cell>
+      </Section>
 
       <Section
+        header="Кому дарим"
         footer={
           showError
-            ? 'Латиница, цифры и подчёркивания, от 4 до 32 символов. Например: durov'
-            : 'Username получателя в Telegram, без @'
+            ? 'Латиница, цифры и подчёркивания, от 4 до 32 символов.'
+            : 'Username получателя в Telegram. Можно купить и себе.'
         }
       >
         <Input
-          header="Получатель"
-          placeholder="durov"
+          before={<span style={{ color: 'var(--tgui--hint_color)', fontSize: 17 }}>@</span>}
+          placeholder="username"
           value={value}
-          status={showError ? 'error' : undefined}
+          status={showError ? 'error' : 'default'}
           onChange={(e) => setValue(e.target.value)}
           autoCapitalize="off"
           autoCorrect="off"
+          autoComplete="off"
           spellCheck={false}
+          enterKeyHint="done"
         />
       </Section>
     </List>

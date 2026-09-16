@@ -69,6 +69,31 @@ export function CheckIcon({ size = 40, color = '#fff' }: { size?: number; color?
   );
 }
 
+/** Символ TON в фирменном круге — индикатор валюты, как в кошельках. */
+export function TonLogo({ size = 40 }: { size?: number }) {
+  return (
+    <svg className="asset-logo" width={size} height={size} viewBox="0 0 56 56" fill="none">
+      <circle cx="28" cy="28" r="28" fill="#0098EA" />
+      <path
+        d="M37.56 15.63H18.44c-3.52 0-5.74 3.79-3.98 6.86l11.8 20.45c.77 1.34 2.7 1.34 3.47 0l11.8-20.45c1.77-3.06-.46-6.86-3.97-6.86Zm-11.3 21.18-2.57-4.97-6.2-11.1c-.41-.7.1-1.62.95-1.62h7.82v17.69Zm12.25-16.07-6.2 11.1-2.57 4.97V19.12h7.82c.86 0 1.36.91.95 1.62Z"
+        fill="#fff"
+      />
+    </svg>
+  );
+}
+
+/** Знак Tether (USDT) — упрощённый, узнаваемый в размере иконки. */
+export function UsdtLogo({ size = 40 }: { size?: number }) {
+  return (
+    <svg className="asset-logo" width={size} height={size} viewBox="0 0 56 56" fill="none">
+      <circle cx="28" cy="28" r="28" fill="#26A17B" />
+      <rect x="15" y="15" width="26" height="6" rx="1.5" fill="#fff" />
+      <rect x="24.5" y="15" width="7" height="27" rx="1.5" fill="#fff" />
+      <ellipse cx="28" cy="27.5" rx="12.5" ry="3.8" stroke="#fff" strokeWidth="2.4" />
+    </svg>
+  );
+}
+
 export function WalletIcon({ size = 20 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
